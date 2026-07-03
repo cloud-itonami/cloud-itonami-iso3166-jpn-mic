@@ -1,0 +1,12 @@
+{:itonami.blueprint/id "cloud-itonami-iso3166-jpn-mic"
+ :itonami.blueprint/name "Independent MIC Telecom & Broadcasting Licensing Compliance Service — Japan (MIC)"
+ :itonami.blueprint/iso3166 "JPN-MIC"
+ :itonami.blueprint/iso3166-parent "JPN"
+ :itonami.blueprint/ooyake-id "gov.jpn.mic"
+ :itonami.blueprint/domain :public-sector/mic-telecom-compliance
+ :itonami.blueprint/license "AGPL-3.0-or-later"
+ :itonami.blueprint/social-impact [:telecom-license-clarity :broadcasting-market-access :public-spend-transparency]
+ :itonami.blueprint/governor :telecom-licensing-compliance-governor
+ :itonami.blueprint/robotics false
+ :itonami.blueprint/required-technologies [:identity :forms :dmn :bpmn :audit-ledger]
+ :itonami.blueprint/status :public-oss}
