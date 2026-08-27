@@ -53,6 +53,53 @@ set — it always requires human sign-off (mirrors `cloud-itonami-M6910`'s
   Japan-licensed counsel or a registered agent where the law requires
   licensed representation.
 
+## Regulatory source register
+
+The citation requirement above has a referent: [`facts.edn`](facts.edn), a
+register of the statutes and official pages this repository is allowed to
+build a requirement on. A law or page that is not in that table has **no
+spec-basis here** — extend the table, never invent an id or a URL.
+
+Re-check it against the live authorities:
+
+```bash
+nbb scripts/verify-facts.cljs
+```
+
+Three exit codes, and the third is the point:
+
+| exit | meaning |
+|---|---|
+| `0` | every source re-fetched and matched |
+| `1` | a source did not check out — **the register is wrong** |
+| `2` | the run could not answer — **not a pass** |
+
+`2` exists because a check that could not run must not return the same value
+as a check that ran and found nothing. Three measured hazards on MIC's own
+hosts make that distinction load-bearing rather than decorative:
+
+- **`www.soumu.go.jp` serves Shift_JIS and does not say so in the HTTP
+  header.** A body read with the default UTF-8 decoding does not throw — it
+  returns stable mojibake, so the live top page's title `総務省` reads as
+  `������`. Left unhandled that reports every live page in the register as a
+  dead citation, or, if an author pins the mojibake, passes forever while
+  asserting nothing.
+- **On `www.tele.soumu.go.jp`, a dead citation and a blocked client are the
+  same bytes.** A real page fetched without a browser User-Agent and a page
+  that does not exist both return 403 with an identical 1,727-byte body
+  (`sha256 3559970027daab21…`). That host therefore carries no page entries,
+  and the byte-identity is re-measured every run so that the day the block
+  lifts is noticed rather than assumed.
+- **`laws.e-gov.go.jp` cannot be checked as a page at all** — a real law URL
+  and an invented one agree on status, final URL and title. Statutes are
+  resolved through the law API instead.
+
+Force status is checked as two fields, not one: `特定通信・放送開発事業実施
+円滑化法` was repealed in 2024 and still answers with the title and law
+number a citer would have written down, while `413AC0000000137` is not
+repealed at all yet carries `PreviousEnforced`. Each half has a real
+statute as its negative control.
+
 ## Capability layer
 
 Resolves via [`kotoba-lang/iso3166`](https://github.com/kotoba-lang/iso3166)

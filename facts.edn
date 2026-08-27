@@ -1,0 +1,706 @@
+;; Regulatory source register for JPN-MIC telecommunications-carrier and
+;; broadcasting licensing compliance.
+;;
+;; README.md says: "Every regulatory claim must cite the official MIC source."
+;; docs/operator-guide.md requires "clear provenance (official MIC source
+;; citation) for every requirement surfaced". docs/business-model.md makes a
+;; fabricated regulatory claim a HARD hold that "must be corrected against a
+;; cited MIC source first".
+;;
+;; Until this file existed there was no such list. Three documents required a
+;; citation against a set that did not exist, so no claim in this repository
+;; could be traced to anything, and nothing could tell a real citation from an
+;; invented one. This is that list.
+;;
+;; Shape is tx-data (a vector of entity maps), like every other EDN corpus in
+;; this workspace, so it loads with
+;;   (d/transact conn (edn/read-string (slurp "facts.edn")))
+;; :source/id is the join key. A law not in this table has NO spec-basis for
+;; this repository -- extend the table, never invent an id or a URL.
+;;
+;; VERIFIED BY `nbb scripts/verify-facts.cljs`, which re-fetches every entry
+;; from the live authority. Each entry carries a :source/verify tag naming
+;; WHICH check establishes it. The checks are not interchangeable, and the
+;; reasons are the main thing this file has to teach.
+;;
+;; ── THIS MINISTRY SERVES Shift_JIS AND DOES NOT SAY SO IN THE HEADER
+;;
+;; Measured 2026-08-27: every page on www.soumu.go.jp answers
+;; `Content-Type: text/html` with NO charset parameter, and the bytes are
+;; Shift_JIS -- the encoding is declared only in the HTML meta.
+;;
+;; A verifier that reads the body with `res.text()` gets UTF-8 decoding, which
+;; on these bytes produces deterministic mojibake. Measured, for the live top
+;; page whose real title is 総務省:
+;;
+;;   res.text()  ->  title "������"
+;;
+;; That is not a crash and not an empty string. It is a stable, plausible-
+;; looking value, and it breaks the register in BOTH directions:
+;;
+;;   - Every Japanese :page/must-contain needle fails to match, so every live
+;;     page in this register would be reported as a dead citation.
+;;   - An author who filled in :page/title by pasting what the verifier
+;;     printed would pin the mojibake, and the check would then pass forever
+;;     while asserting nothing about the page.
+;;
+;; So :host/charset is declared per host and the body is decoded with it, and
+;; the run re-reads each page's own meta charset and REFUSES if it no longer
+;; agrees with the host declaration -- because the day soumu.go.jp migrates to
+;; UTF-8 is the day every stored title in this file becomes wrong, and that
+;; must not surface as a page failure.
+;;
+;; Charset is per HOST, not per ministry: www.tele.soumu.go.jp, the same
+;; ministry's radio portal, is UTF-8. A verifier hardcoding either one gets
+;; the other wrong.
+;;
+;; ── ON www.tele.soumu.go.jp, "DEAD CITATION" AND "BLOCKED CLIENT" ARE THE
+;;    SAME BYTES
+;;
+;; This is the sharpest thing measured here, and it is why that host carries
+;; no page entries.
+;;
+;; Measured 2026-08-27, sha256 over the full response body:
+;;
+;;   real page, browser User-Agent     200  29,830 B  a9b3627578b56125...
+;;   real page, no User-Agent          403   1,727 B  3559970027daab21...
+;;   missing page, browser User-Agent  403   1,727 B  3559970027daab21...
+;;   missing page, no User-Agent       403   1,727 B  3559970027daab21...
+;;
+;; The last three are not merely similar. They are byte-identical, down to the
+;; hash: a live page fetched by a refused client and a page that does not
+;; exist are the same response. There is no field left to separate "your
+;; citation is dead" (FAIL, a claim about this register) from "your client is
+;; refused" (REFUSE, a claim about nothing).
+;;
+;; Sending a browser User-Agent is necessary but NOT sufficient. With the UA,
+;; /j/sys/fees/purpose/index.htm answers 200 while /j/index.htm and
+;; /j/sys/process/index.htm still answer the same 403 -- so even a UA-bearing
+;; run cannot tell which 403s are real. The host is declared
+;; :refuses-indistinguishably, page checks on it are REFUSED rather than
+;; failed, and the byte-identity is re-measured every run. If the host ever
+;; starts telling the two apart, that check is what notices.
+;;
+;; Note this is a DIFFERENT mechanism from the one this repository family
+;; already met on www.mofa.go.jp, where the block is on the TLS fingerprint
+;; and curl is refused while fetch is served. Here curl and fetch behave the
+;; same and the discriminator is the User-Agent header. Same symptom, and the
+;; wrong fix for one is a no-op for the other.
+;;
+;; ── laws.e-gov.go.jp CANNOT BE CHECKED AS A PAGE AT ALL
+;;
+;; Measured 2026-08-27 with this repository's own core statute:
+;; /law/359AC0000000086 (the Telecommunications Business Act, real) and
+;; /law/999ZZ9999999999 (invented) both answer HTTP 200, at the requested URL
+;; with no redirect, with the identical title "e-Gov 法令検索" over a small
+;; client-rendered shell. Status, final URL and title all agree between a real
+;; citation and a fabricated one. The shell's byte length is deliberately NOT
+;; recorded: it was measured at 696 and then at 800 bytes within one session,
+;; so it moves on its own and pinning it would report the host wrong for a
+;; reason that means nothing.
+;;
+;; So the host is declared :indistinguishable, page checks on it are REFUSED,
+;; and every statute is resolved through the law API instead. The
+;; indistinguishability is re-measured every run; if the host ever starts
+;; telling the two apart, this rule has expired and that is what notices.
+;;
+;; ── A NEEDLE THAT IS ON THE MISSING-PAGE BODY IS NOT A NEEDLE
+;;
+;; www.soumu.go.jp's 404 body is a ~39 KB page with the full site chrome
+;; attached. Measured present ON THAT BODY, for a URL that does not exist:
+;;
+;;   総務省   届出   霞が関   100-8926   03-5253-5111
+;;
+;; 届出 is one of the two entry routes under the Telecommunications Business
+;; Act, so "fetch the entry-procedure page and look for 届出" passes on a page
+;; that is not there. And 100-8926 / 03-5253-5111 are exactly what
+;; organization.edn asserts, so "confirm the HQ contact by looking for the
+;; postcode" passes on the missing page too.
+;;
+;; The verifier does not leave that to whoever writes the next entry. It
+;; fetches each host's missing-page body once per run and FAILS any
+;; :page/must-contain string found on it, with reason :chrome-needle, before
+;; the cited page is fetched at all. A needle that cannot discriminate is a
+;; finding, not a detail.
+;;
+;; ── A REPEALED ACT ANSWERS EXACTLY LIKE A LIVE ONE
+;;
+;; 特定通信・放送開発事業実施円滑化法 (平成二年法律第三十五号) was MIC's own
+;; telecommunications-and-broadcasting development statute and was REPEALED on
+;; 2024-04-01. Ask the law API about it today and it answers total_count 1,
+;; with the title and the law number matching what a citer would have written
+;; down. A verifier comparing only title and number reports PASS for a statute
+;; repealed two years ago -- recent enough that an adviser could plausibly
+;; still be citing it.
+;;
+;; The distinguishing fields are repeal_status / repeal_date, declared per
+;; entry and re-measured here. It is deliberately NOT remain_in_force: that
+;; field reads like the answer and is not. Measured on the Telecommunications
+;; Business Act itself, live and in force, remain_in_force is false -- the
+;; same value the repealed Act carries. Keying on it would mark every live
+;; statute in this register dead.
+;;
+;; It is carried below as :repealed-statute so it cannot be read as citable,
+;; and so the repeal check has a real negative control to drive.
+;;
+;; ── AND A LIVE ACT CAN FAIL A THIRD WAY THE REPEAL FIELD DOES NOT SEE
+;;
+;; 特定電気通信による情報の流通によって発生する権利侵害等への対処に関する法律
+;; (413AC0000000137) is live: repeal_status is None. But its
+;; current_revision_status is PreviousEnforced, not CurrentEnforced -- the
+;; revision e-Gov displays is not the one in force. This is the statute
+;; formerly titled 特定電気通信役務提供者の損害賠償責任の制限及び発信者情報の
+;; 開示に関する法律, renamed in the 2024 amendment, and an adviser citing the
+;; old title gets a title that no longer matches while the law id does.
+;;
+;; So force-status is two independent fields, not one. Both are declared per
+;; entry and both are checked, and this Act is the negative control that
+;; drives the revision half -- title, number and repeal status all correct, so
+;; only the revision field can catch it.
+;;
+;; ── LAW IDS ARE NOT DERIVABLE AND WERE NOT GUESSED
+;;
+;; Every id below was resolved through the API. Measured: 電波法施行規則 is
+;; 325M50080000014 and 放送法施行規則 is 325M50080000010 -- 電波監理委員会規則
+;; is M50080, not the M50001 that 郵政省令 uses, and every derivation from the
+;; parent Act's own id returns total_count 0. Eight ids guessed by that route
+;; before the API was asked, eight misses.
+;;
+;; ── PAGE PATHS ARE NOT DERIVABLE EITHER
+;;
+;; Measured 2026-08-27: of ten plausible soumu.go.jp paths written from the
+;; site's own naming conventions, EIGHT answered 404, including
+;; /main_sosiki/joho_tsusin/index.htm and
+;; /main_sosiki/joho_tsusin/top/tsushin_service/index.html. Every page URL
+;; below was read off a live index page, not composed.
+;;
+;; ── DATES HERE ARE UTC
+;;
+;; :source/retrieved-at and :coverage/measured-at are UTC dates, matching the
+;; commit that carries them. This machine runs JST, so "today" is one day
+;; ahead of UTC for nine hours out of every twenty-four -- long enough that a
+;; register written in the evening picks up tomorrow's date and lands dated
+;; one day AFTER the commit introducing it. A source dated later than the
+;; commit that cites it reads as a date nobody measured, which is the one
+;; thing this file exists to make impossible. Use `date -u`.
+;;
+;; ── WHAT :source/covers CLAIMS, AND WHERE IT STOPS
+;;
+;; Claims stop at the level actually checked: law identity, repeal status and
+;; revision status for statutes, and for pages the title and the body strings
+;; read on 2026-08-27. No article text is asserted, because no article text
+;; was read. In particular NOTHING below establishes which of 登録 and 届出
+;; a given operator needs -- that turns on facility scale thresholds in
+;; 電気通信事業法施行規則, which is cited here as an instrument and not read.
+
+[
+ ;; ── What this register does not cover ──────────────────────────────────────
+ {:source/id "register.coverage"
+  :source/kind :coverage
+  :coverage/entries 23
+  :coverage/by-verify {:e-gov-law-id 14 :page-text 9}
+  :coverage/measured-at "2026-08-27"
+  :coverage/excludes
+  #{;; Article text. Nothing below asserts what any provision SAYS -- only
+    ;; that the instrument exists, is identified as written, and is in the
+    ;; force status declared. A requirement checklist built on this register
+    ;; still has to read the provision.
+    :article-text
+    ;; The 登録 / 届出 threshold itself. Which entry route an operator falls
+    ;; under is the first question this repository is asked, and it is decided
+    ;; by facility scale rules in 電気通信事業法施行規則. The ordinance is
+    ;; cited; the threshold is not established by citing it.
+    :entry-route-thresholds
+    ;; Radio-station licensing procedure. 電波法 and 電波法施行規則 are below,
+    ;; but the operational procedure lives on www.tele.soumu.go.jp, which this
+    ;; register cannot check at all -- see the byte-identity note above.
+    :radio-station-procedure
+    ;; Fee schedules. 電波利用料 amounts and the 資格手続 fee table both change
+    ;; on their own timetable and neither is carried here.
+    :fee-schedules
+    ;; Subnational instruments. Public-sector network and broadcasting
+    ;; procurement is very often run by a prefecture or a city under its own
+    ;; rules, and none of those are here.
+    :subnational-instruments
+    ;; Whether a named operator currently holds a registration, notification
+    ;; or licence. The procedure pages are cited; no operator's status is.
+    :operator-registration-status}}
+
+ ;; ── Host behaviour the page checks rest on ─────────────────────────────────
+ ;; Re-measured every run. Every :page-* entry below is only as good as these.
+
+ {:source/id "host.soumu"
+  :source/kind :host-behaviour
+  :host/name "www.soumu.go.jp"
+  :host/missing-path :answers-404
+  :host/missing-status 404
+  :host/missing-title "総務省｜ご案内ページ　－ご利用のページが見つかりません－"
+  :host/known-real-path "/menu_seisaku/ictseisaku/index.html"
+  :host/charset "shift_jis"
+  :host/declares-charset-in-header? false
+  :source/retrieved-at "2026-08-27"
+  :source/note "Answers a clean 404 for a path it does not have, which makes
+                this the one host in the register where a page check can
+                distinguish a dead citation on status alone. The catch is the
+                encoding: Content-Type is bare text/html and the bytes are
+                Shift_JIS, so a body read with the default UTF-8 decoding
+                yields stable mojibake rather than an error -- the live top
+                page's title 総務省 reads as \"������\". :host/charset is what
+                the run decodes with, and each page's own meta charset is
+                re-read and required to still agree."}
+
+ {:source/id "host.tele-soumu"
+  :source/kind :host-behaviour
+  :host/name "www.tele.soumu.go.jp"
+  :host/missing-path :refuses-indistinguishably
+  :host/charset "utf-8"
+  :host/known-real-path "/j/sys/fees/purpose/index.htm"
+  :host/requires-user-agent? true
+  :host/refusal-status 403
+  :host/refusal-bytes 1727
+  :host/refusal-sha256-prefix "3559970027daab21"
+  :source/retrieved-at "2026-08-27"
+  :source/note "Carries NO page entries, on purpose. A live page fetched
+                without a browser User-Agent, a missing page fetched with one,
+                and a missing page fetched without one all return the SAME
+                BYTES -- 403, 1,727 bytes, sha256 3559970027daab21... -- so a
+                403 from this host is not evidence about the register. Sending
+                the UA is necessary but not sufficient: with it,
+                :host/known-real-path answers 200 while /j/index.htm and
+                /j/sys/process/index.htm still answer the identical 403. The
+                run re-measures the byte-identity and REFUSES any page entry
+                naming this host. Different mechanism from the TLS-fingerprint
+                block this repository family met on www.mofa.go.jp -- there
+                curl was refused and fetch served; here both behave alike and
+                only the User-Agent moves the answer."}
+
+ {:source/id "host.laws-e-gov"
+  :source/kind :host-behaviour
+  :host/name "laws.e-gov.go.jp"
+  :host/missing-path :indistinguishable
+  :host/charset "utf-8"
+  :host/known-real-path "/law/359AC0000000086"
+  :source/retrieved-at "2026-08-27"
+  :source/note "A real law path and an invented one agree on status (200),
+                final URL (no redirect) and title (\"e-Gov 法令検索\"). The
+                body length is not pinned -- it moved from 696 to 800 bytes
+                within one session. There is nothing left for a page check to
+                compare, so page checks on this host are REFUSED and statutes
+                are resolved through the API. Re-measured every run against
+                this repository's own core statute; if the host ever starts
+                discriminating, that is the check which notices."}
+
+ ;; ── The Act this repository is built on ────────────────────────────────────
+
+ {:source/id "law.telecom-business-act"
+  :source/kind :statute
+  :source/title "電気通信事業法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/359AC0000000086"
+  :source/verify :e-gov-law-id
+  :egov/law-id "359AC0000000086"
+  :egov/law-title "電気通信事業法"
+  :egov/law-num "昭和五十九年法律第八十六号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-entry :carrier-registration :carrier-notification
+                   :agency-mandate}
+  :source/note "The Telecommunications Business Act. Everything this
+                repository offers on the carrier side rests on this
+                instrument. It is the statute that created the 登録 /
+                届出 split; which side of it an operator falls on is decided
+                by the施行規則 below and is NOT established here."}
+
+ {:source/id "law.telecom-business-order"
+  :source/kind :statute
+  :source/title "電気通信事業法施行令"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/360CO0000000075"
+  :source/verify :e-gov-law-id
+  :egov/law-id "360CO0000000075"
+  :egov/law-title "電気通信事業法施行令"
+  :egov/law-num "昭和六十年政令第七十五号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-entry}}
+
+ {:source/id "law.telecom-business-ordinance"
+  :source/kind :statute
+  :source/title "電気通信事業法施行規則"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/360M50001000025"
+  :source/verify :e-gov-law-id
+  :egov/law-id "360M50001000025"
+  :egov/law-title "電気通信事業法施行規則"
+  :egov/law-num "昭和六十年郵政省令第二十五号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-entry :carrier-registration :carrier-notification}
+  :source/note "The ordinance carrying the facility-scale thresholds that
+                decide 登録 versus 届出. Cited as an instrument only -- the
+                thresholds themselves are in :coverage/excludes, because no
+                article text was read."}
+
+ {:source/id "law.telecom-report-ordinance"
+  :source/kind :statute
+  :source/title "電気通信事業報告規則"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/363M50001000046"
+  :source/verify :e-gov-law-id
+  :egov/law-id "363M50001000046"
+  :egov/law-title "電気通信事業報告規則"
+  :egov/law-num "昭和六十三年郵政省令第四十六号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:carrier-reporting}
+  :source/note "The continuing-obligation side. An operator that clears entry
+                is then on a reporting schedule under this ordinance, which is
+                the part a compliance engagement actually lives in."}
+
+ {:source/id "law.telecom-chief-engineer-ordinance"
+  :source/kind :statute
+  :source/title "電気通信主任技術者規則"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/360M50001000027"
+  :source/verify :e-gov-law-id
+  :egov/law-id "360M50001000027"
+  :egov/law-title "電気通信主任技術者規則"
+  :egov/law-num "昭和六十年郵政省令第二十七号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-qualifications}}
+
+ {:source/id "law.wire-telecom-act"
+  :source/kind :statute
+  :source/title "有線電気通信法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/328AC0000000096"
+  :source/verify :e-gov-law-id
+  :egov/law-id "328AC0000000096"
+  :egov/law-title "有線電気通信法"
+  :egov/law-num "昭和二十八年法律第九十六号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-entry :wire-facilities}
+  :source/note "The separate notification duty for wire telecom facilities. An
+                operator laying its own cable hits this in addition to the
+                Business Act, not instead of it."}
+
+ {:source/id "law.ntt-act"
+  :source/kind :statute
+  :source/title "日本電信電話株式会社等に関する法律"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/359AC0000000085"
+  :source/verify :e-gov-law-id
+  :egov/law-id "359AC0000000085"
+  :egov/law-title "日本電信電話株式会社等に関する法律"
+  :egov/law-num "昭和五十九年法律第八十五号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:interconnection}
+  :source/note "Carried because an operator delivering a public-sector network
+                contract almost always interconnects with an NTT company, and
+                the obligations on the other side of that interconnection are
+                statutory rather than commercial."}
+
+ ;; ── Radio and broadcasting ─────────────────────────────────────────────────
+
+ {:source/id "law.radio-act"
+  :source/kind :statute
+  :source/title "電波法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/325AC0000000131"
+  :source/verify :e-gov-law-id
+  :egov/law-id "325AC0000000131"
+  :egov/law-title "電波法"
+  :egov/law-num "昭和二十五年法律第百三十一号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:radio-licensing :broadcast-licensing}
+  :source/note "The Radio Act. A broadcasting licence is two instruments, not
+                one: the station licence is issued under this Act and the
+                broadcast-business authorisation under 放送法 below."}
+
+ {:source/id "law.radio-act-ordinance"
+  :source/kind :statute
+  :source/title "電波法施行規則"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/325M50080000014"
+  :source/verify :e-gov-law-id
+  :egov/law-id "325M50080000014"
+  :egov/law-title "電波法施行規則"
+  :egov/law-num "昭和二十五年電波監理委員会規則第十四号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:radio-licensing}
+  :source/note "Issued as 電波監理委員会規則, a body abolished in 1952, so the
+                id is 325M50080000014 and not the 325M50001... a derivation
+                from 郵政省令 produces. That derivation returns total_count 0."}
+
+ {:source/id "law.broadcast-act"
+  :source/kind :statute
+  :source/title "放送法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/325AC0000000132"
+  :source/verify :e-gov-law-id
+  :egov/law-id "325AC0000000132"
+  :egov/law-title "放送法"
+  :egov/law-num "昭和二十五年法律第百三十二号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:broadcast-licensing :foreign-ownership}
+  :source/note "The Broadcasting Act. Since the 2011 consolidation this is
+                also where cable and telecom-service broadcasting live -- the
+                separate 有線テレビジョン放送法 and 電気通信役務利用放送法 are
+                gone and are not in e-Gov at all, so a citation to either
+                cannot even be checked, only recognised as obsolete."}
+
+ {:source/id "law.broadcast-act-ordinance"
+  :source/kind :statute
+  :source/title "放送法施行規則"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/325M50080000010"
+  :source/verify :e-gov-law-id
+  :egov/law-id "325M50080000010"
+  :egov/law-title "放送法施行規則"
+  :egov/law-num "昭和二十五年電波監理委員会規則第十号"
+  :egov/repeal-status "None"
+  :egov/revision-status "CurrentEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:broadcast-licensing}}
+
+ ;; ── Content and user-information duties on a carrier ───────────────────────
+
+ {:source/id "law.info-platform-act"
+  :source/kind :statute
+  :source/title "特定電気通信による情報の流通によって発生する権利侵害等への対処に関する法律"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/413AC0000000137"
+  :source/verify :e-gov-law-id
+  :egov/law-id "413AC0000000137"
+  :egov/law-title "特定電気通信による情報の流通によって発生する権利侵害等への対処に関する法律"
+  :egov/law-num "平成十三年法律第百三十七号"
+  :egov/repeal-status "None"
+  :egov/revision-status "PreviousEnforced"
+  :law/in-force true
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:provider-liability :content-takedown}
+  :source/former-title "特定電気通信役務提供者の損害賠償責任の制限及び発信者情報の開示に関する法律"
+  :source/note "Live -- repeal_status is None -- but current_revision_status
+                is PreviousEnforced, so the revision e-Gov displays is not the
+                one in force. Renamed by the 2024 amendment, which is why an
+                adviser working from the old title (recorded here as
+                :source/former-title) gets a title mismatch against a law id
+                that is perfectly correct. This entry is also the negative
+                control for the revision half of the force check: title,
+                number and repeal status are all right, so nothing but the
+                revision field can catch a claim that it is CurrentEnforced."}
+
+ ;; ── Negative control: a repealed Act that still answers like a live one ────
+
+ {:source/id "law.repealed-telecom-broadcast-development"
+  :source/kind :repealed-statute
+  :source/title "特定通信・放送開発事業実施円滑化法"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/402AC0000000035"
+  :source/verify :e-gov-law-id
+  :egov/law-id "402AC0000000035"
+  :egov/law-title "特定通信・放送開発事業実施円滑化法"
+  :egov/law-num "平成二年法律第三十五号"
+  :egov/repeal-status "Repeal"
+  :egov/repeal-date "2024-04-01"
+  :egov/revision-status "Repeal"
+  :law/in-force false
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{}
+  :source/note "NOT CITABLE. Repealed 2024-04-01, and carried here precisely
+                because the API still answers total_count 1 for it with the
+                title and law number a citer would have written down. It is
+                MIC's own telecom-and-broadcasting development statute and it
+                died recently enough that an adviser could still be quoting
+                it. This is the negative control the repeal check drives: a
+                real repealed Act, not an invented id."}
+
+ {:source/id "law.repealed-sender-information-ordinance"
+  :source/kind :repealed-statute
+  :source/title "特定電気通信役務提供者の損害賠償責任の制限及び発信者情報の開示に関する法律第四条第一項の発信者情報を定める省令"
+  :source/publisher "e-Gov 法令検索 (Digital Agency)"
+  :source/url "https://laws.e-gov.go.jp/law/414M60000008057"
+  :source/verify :e-gov-law-id
+  :egov/law-id "414M60000008057"
+  :egov/law-title "特定電気通信役務提供者の損害賠償責任の制限及び発信者情報の開示に関する法律第四条第一項の発信者情報を定める省令"
+  :egov/law-num "平成十四年総務省令第五十七号"
+  :egov/repeal-status "Repeal"
+  :egov/repeal-date "2022-10-01"
+  :egov/revision-status "Repeal"
+  :law/in-force false
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{}
+  :source/note "NOT CITABLE. Repealed 2022-10-01. Carried as a second repeal
+                control at the ordinance level, and because its title still
+                names the pre-2024 form of the Act above -- a disclosure
+                request drafted from this pair would cite two names that no
+                longer describe anything in force."}
+
+ ;; ── MIC pages: the procedures this repository actually walks an operator
+ ;;    through. All on www.soumu.go.jp, all Shift_JIS, all read off a live
+ ;;    index rather than composed. ─────────────────────────────────────────────
+
+ {:source/id "page.telecom-entry-procedure"
+  :source/kind :guidance-page
+  :source/title "電気通信事業参入・変更手続の案内"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/menu_seisaku/ictseisaku/denkitsushin_suishin/tetsuzuki/index.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜電気通信政策の推進｜電気通信事業参入・変更手続の案内"
+  :page/must-contain ["電気通信事業法" "登録" "参入"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-entry :carrier-registration :carrier-notification}
+  :source/note "The entry point for the carrier half of this repository.
+                届出 is deliberately NOT a needle here even though it is the
+                page's own subject: 届出 is present on this host's 404 body,
+                so it would pass on a page that does not exist. 登録, the
+                other entry route, is not on the 404 body and is used
+                instead."}
+
+ {:source/id "page.telecom-policy-index"
+  :source/kind :guidance-page
+  :source/title "電気通信政策の推進"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/menu_seisaku/ictseisaku/denkitsushin_suishin/index.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜電気通信政策の推進"
+  :page/must-contain ["参入" "電気通信番号" "ユニバーサルサービス"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-entry :agency-mandate}
+  :source/note "The index every other telecom page below was read off. Carried
+                as a source in its own right so that a page that moves is
+                distinguishable from an index that reorganised."}
+
+ {:source/id "page.telecom-qualifications"
+  :source/kind :guidance-page
+  :source/title "電気通信関係資格手続きの案内"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/main_sosiki/joho_tsusin/denkishikaku.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜電気通信政策の推進｜電気通信関係資格手続きの案内（令和7年11月5日より交付手数料が変わりました。 IIIをご確認ください。）"
+  :page/must-contain ["電気通信主任技術者" "工事担任者"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-qualifications}
+  :source/note "This page's <title> embeds a dated fee-change notice, so it is
+                expected to drift on its own schedule. A :title-drift finding
+                here means the notice changed, NOT that the page died -- the
+                correct response is to re-measure and update this entry. It is
+                pinned as measured anyway, because a title that silently
+                changes is exactly what an unchecked register cannot see."}
+
+ {:source/id "page.telecom-numbering"
+  :source/kind :guidance-page
+  :source/title "電気通信番号制度"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/main_sosiki/joho_tsusin/top/tel_number/index.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜電気通信番号制度"
+  :page/must-contain ["電気通信番号" "電気通信事業法"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:telecom-numbering}}
+
+ {:source/id "page.specified-user-information"
+  :source/kind :guidance-page
+  :source/title "特定利用者情報の適正な取扱いに係る規律"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/main_sosiki/joho_tsusin/tokuteiriyoujoho/index.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜特定利用者情報の適正な取扱いに係る規律"
+  :page/must-contain ["特定利用者情報" "電気通信事業法"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:user-information-duties}
+  :source/note "The duty a carrier above the designation threshold picks up on
+                top of entry. Distinct from the PPC's personal-information
+                regime, which is a different agency's and is not carried
+                here."}
+
+ {:source/id "page.external-transmission-rules"
+  :source/kind :guidance-page
+  :source/title "外部送信規律"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/main_sosiki/joho_tsusin/d_syohi/gaibusoushin_kiritsu.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜自分に関する情報が第三者に送信される場合、 自身で確認できるようになります。"
+  :page/must-contain ["外部送信" "電気通信事業法"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:user-information-duties}
+  :source/note "The page's <title> is a sentence about the rule rather than
+                its name, which is why the title is pinned as measured and not
+                as an adviser would write it down."}
+
+ {:source/id "page.broadcast-policy-index"
+  :source/kind :guidance-page
+  :source/title "放送政策の推進"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/menu_seisaku/ictseisaku/housou_suishin/index.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜放送政策の推進"
+  :page/must-contain ["放送法" "基幹放送" "免許"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:broadcast-licensing}}
+
+ {:source/id "page.terrestrial-broadcast-licence"
+  :source/kind :guidance-page
+  :source/title "地上基幹放送局の免許手続等に関する情報提供ポータルサイト"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/menu_seisaku/ictseisaku/housou_suishin/122831.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜放送政策の推進｜地上基幹放送局の免許手続等に関する情報提供ポータルサイト"
+  :page/must-contain ["基幹放送" "免許" "電波法"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:broadcast-licensing :radio-licensing}
+  :source/note "The broadcasting counterpart of the telecom entry page, and
+                the one place in the register where both statutes of the
+                two-instrument licence appear on the same page."}
+
+ {:source/id "page.broadcast-foreign-ownership"
+  :source/kind :guidance-page
+  :source/title "放送分野における外資規制"
+  :source/publisher "総務省"
+  :source/url "https://www.soumu.go.jp/menu_seisaku/ictseisaku/housou_suishin/housou_gaishi.html"
+  :source/verify :page-text
+  :page/host "www.soumu.go.jp"
+  :page/title "総務省｜放送政策の推進｜放送分野における外資規制"
+  :page/must-contain ["外資規制" "放送法"]
+  :source/retrieved-at "2026-08-27"
+  :source/covers #{:foreign-ownership :broadcast-licensing}
+  :source/note "Carried because it is the requirement most likely to
+                disqualify an operator before any filing is drafted, and the
+                one an incorporated-in-Japan operator with foreign
+                shareholding is least likely to raise itself."}
+]

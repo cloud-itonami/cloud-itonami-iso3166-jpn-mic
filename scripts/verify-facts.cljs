@@ -1,0 +1,804 @@
+#!/usr/bin/env nbb
+;; Re-checks every source in facts.edn against the live authority.
+;;
+;;   nbb scripts/verify-facts.cljs                (from the repository root)
+;;   nbb scripts/verify-facts.cljs --facts <path>
+;;
+;; Three exit codes, on purpose:
+;;   0  every source checked out
+;;   1  a source did not check out          -- the register is wrong
+;;   2  the run could not answer            -- NOT a pass
+;;
+;; 2 exists because a check that could not run must not return the same value
+;; as a check that ran and found nothing. An unreadable facts.edn, a host that
+;; could not be reached, an empty register, a host whose behaviour no longer
+;; matches what facts.edn declares, or a self-test that did not discriminate
+;; are all 2, and all of them print REFUSED.
+;;
+;; ── THE TWO CHECKS ARE NOT INTERCHANGEABLE
+;;
+;;   :e-gov-law-id   Resolve the id through the e-Gov law API and require the
+;;                   title, the law number, the REPEAL status and the REVISION
+;;                   status to match the register. HTTP status is never
+;;                   consulted here; see the blind-host note below.
+;;
+;;   :page-text      2xx, AND the final URL is still the page asked for, AND
+;;                   the page's meta charset still agrees with the host
+;;                   declaration, AND the <title> matches, AND every string in
+;;                   :page/must-contain is present in the de-tagged body --
+;;                   after each needle has been cleared against the host's own
+;;                   missing-page body.
+;;
+;; ── THIS MINISTRY SERVES Shift_JIS AND DOES NOT SAY SO IN THE HEADER
+;;
+;; This is the check this verifier exists for, and it is specific to where it
+;; runs. Measured 2026-08-27: every page on www.soumu.go.jp answers
+;; `Content-Type: text/html` with NO charset parameter, and the bytes are
+;; Shift_JIS. The encoding is declared only in the HTML meta.
+;;
+;; `res.text()` decodes as UTF-8. On these bytes that does not throw and does
+;; not return empty -- it returns stable mojibake. Measured on the live top
+;; page whose real title is 総務省:
+;;
+;;   res.text()                       ->  "������"
+;;   TextDecoder("shift_jis")         ->  "総務省"
+;;
+;; A verifier built on res.text() breaks this register in both directions.
+;; Every Japanese needle fails to match, so every live page is reported as a
+;; dead citation -- exit 1, a claim about the register, from a run that
+;; measured only its own decoding. And an author who filled in :page/title
+;; from what that verifier printed would pin the mojibake, after which the
+;; check passes forever while asserting nothing.
+;;
+;; So the body is decoded with :host/charset, and the page's own meta charset
+;; is re-read every run and required to still agree with the host declaration.
+;; The day soumu.go.jp migrates to UTF-8, every stored title in facts.edn
+;; becomes wrong at once; that has to surface as REFUSED (the register is out
+;; of date) and not as nine page failures (the pages are gone).
+;;
+;; Charset is per HOST. www.tele.soumu.go.jp, the same ministry's radio
+;; portal, is UTF-8.
+;;
+;; ── ON www.tele.soumu.go.jp, "DEAD CITATION" AND "BLOCKED CLIENT" ARE THE
+;;    SAME BYTES
+;;
+;; Measured 2026-08-27, sha256 over the full response body:
+;;
+;;   real page, browser User-Agent     200  29,830 B  a9b3627578b56125...
+;;   real page, no User-Agent          403   1,727 B  3559970027daab21...
+;;   missing page, browser User-Agent  403   1,727 B  3559970027daab21...
+;;   missing page, no User-Agent       403   1,727 B  3559970027daab21...
+;;
+;; The last three are byte-identical. A live page fetched by a refused client
+;; and a page that does not exist are the same response, so no field is left
+;; to separate "your citation is dead" (FAIL) from "your client is refused"
+;; (REFUSE). Sending the UA is necessary but not sufficient: with it,
+;; /j/sys/fees/purpose/index.htm answers 200 while /j/index.htm and
+;; /j/sys/process/index.htm still answer that same 403.
+;;
+;; So the host is declared :refuses-indistinguishably, page checks on it are
+;; REFUSED, and this run re-measures the identity every time: it fetches the
+;; known-real path with and without the UA and the missing path with the UA,
+;; and requires 200 / 403 / 403 with the two 403 bodies still identical. If
+;; the block is ever lifted, that is the check that notices.
+;;
+;; This is a DIFFERENT mechanism from the one this repository family met on
+;; www.mofa.go.jp, where the block is on the TLS fingerprint and curl is
+;; refused while fetch is served. Here curl and fetch behave alike and only
+;; the User-Agent moves the answer -- so the fix for one is a no-op for the
+;; other, and neither is a general rule about go.jp.
+;;
+;; ── laws.e-gov.go.jp CANNOT BE CHECKED AS A PAGE AT ALL
+;;
+;; Measured with this repository's own core statute: /law/359AC0000000086 (the
+;; Telecommunications Business Act) and /law/999ZZ9999999999 (invented) both
+;; answer HTTP 200, at the requested URL with no redirect, with the identical
+;; title "e-Gov 法令検索" over a small client-rendered shell. Status, final
+;; URL and title all agree between a real citation and a fabricated one. The
+;; shell's byte length is NOT pinned: it was measured at 696 and then at 800
+;; bytes within one session, so it moves on its own and a check keyed to it
+;; would report the host wrong for a reason that means nothing.
+;;
+;; That is worse than a soft 404, where the landing URL at least gives the lie
+;; away. Nothing is left for a page check to compare, so the host is declared
+;; :indistinguishable, page checks on it are REFUSED, and statutes are
+;; resolved through the API. The indistinguishability is re-measured every run
+;; by fetching a known-real path and an invented one and requiring them to
+;; still agree; if the host ever starts telling them apart, this is what
+;; notices.
+;;
+;; ── A NEEDLE THAT IS ON THE MISSING-PAGE BODY IS NOT A NEEDLE
+;;
+;; www.soumu.go.jp's 404 body carries the full site chrome. Measured present
+;; ON THAT BODY, for a URL that does not exist:
+;;
+;;   総務省   届出   霞が関   100-8926   03-5253-5111
+;;
+;; 届出 is one of the two entry routes under the Telecommunications Business
+;; Act, so the obvious sentinel for the entry-procedure page is on the
+;; missing-page body -- and so is the HQ contact, since 100-8926 and
+;; 03-5253-5111 are what organization.edn asserts.
+;;
+;; This run therefore fetches each host's missing-page body once and FAILS any
+;; :page/must-contain string found on it, with reason :chrome-needle, before
+;; the cited page is fetched at all.
+;;
+;; ── FORCE STATUS IS TWO FIELDS, AND EACH HAS ITS OWN NEGATIVE CONTROL
+;;
+;; A repealed Act answers the API exactly like a live one:
+;; 特定通信・放送開発事業実施円滑化法 (平成二年法律第三十五号), MIC's own
+;; telecom-and-broadcasting development statute, was repealed 2024-04-01 and
+;; still returns total_count 1 with the title and law number a citer would
+;; have written down. Title-and-number checking reports PASS for it.
+;;
+;; And a LIVE Act can be wrong a second way the repeal field does not see:
+;; 413AC0000000137 has repeal_status None but current_revision_status
+;; PreviousEnforced -- the displayed revision is not the enforced one.
+;;
+;; Both fields are declared per entry and both are checked, and each half has
+;; a real negative control below rather than a fabricated one.
+;;
+;; NOT remain_in_force: that field reads like the answer and is not. Measured
+;; on the Telecommunications Business Act, live and in force, remain_in_force
+;; is false -- the same value the repealed Act carries. Keying on it would
+;; mark every live statute in this register dead.
+;;
+;; ── TWELVE SELF-TESTS, EACH ASSERTING THE REASON AND NOT THE VERDICT
+;;
+;; A negative test that only asserts "it went red" counts a run that went red
+;; for an unrelated cause as a discriminating one. Each self-test drives the
+;; real check function and requires a specific :reason keyword back:
+;;
+;;   :nonexistent-law        an invented law id must not resolve
+;;   :repeal-status-drift    the REAL repealed Act above, declared in force,
+;;                           title and law number left correct -- so only the
+;;                           repeal field can catch it
+;;   :revision-status-drift  the REAL PreviousEnforced Act above, declared
+;;                           CurrentEnforced, with title, number and repeal
+;;                           status all correct -- so only the revision field
+;;                           can catch it
+;;   :law-title-drift        a real law id with the wrong expected title
+;;   :title-drift            a real page with the wrong expected title
+;;   :not-2xx                a path this host answers 404 for
+;;   :missing-text           a real page missing a sentinel string
+;;   :chrome-needle          a needle that is on this host's 404 body
+;;   :charset-drift          a host charset that no longer matches the page's
+;;                           own meta must be REFUSED, because the decode is
+;;                           then wrong and every title and needle below it is
+;;                           meaningless -- nine page FAILURES would be the
+;;                           wrong report
+;;   :mojibake-loses-needles the live entry-procedure page's bytes decoded
+;;                           twice, as Shift_JIS and as UTF-8 the way
+;;                           res.text() would: the real needles must be
+;;                           present in the first and absent from the second.
+;;                           This is what makes the charset handling
+;;                           load-bearing rather than tidy
+;;   :page-on-blind-host     a page entry on a host that cannot discriminate
+;;                           must be REFUSED, not failed
+;;   :coverage-drift         a coverage record that miscounts the register
+;;
+;; The run REFUSES if any self-test returns the wrong reason, and it refuses
+;; before reporting on the register, because a verifier that cannot
+;; discriminate has nothing to say about anything.
+
+(ns verify-facts
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [promesa.core :as p]
+            ["fs" :as fs]
+            ["crypto" :as crypto]))
+
+(def BROWSER-UA
+  (str "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"))
+
+;; --- plumbing -----------------------------------------------------------
+
+(defn- sha256 [buf] (.digest (.update (.createHash crypto "sha256") buf) "hex"))
+
+(defn- decode [buf charset] (.decode (js/TextDecoder. charset) buf))
+
+(defn- fetch-bytes
+  "One GET, returning the raw bytes plus what the transport said. Never
+  decodes -- the caller knows which charset applies, this does not."
+  [url {:keys [ua?]}]
+  (-> (js/fetch url (clj->js {:redirect "follow"
+                              :headers (if ua? {"user-agent" BROWSER-UA} {})}))
+      (p/then (fn [res]
+                (p/then (.arrayBuffer res)
+                        (fn [ab]
+                          (let [buf (js/Buffer.from ab)]
+                            {:status (.-status res)
+                             :ok (.-ok res)
+                             :final (.-url res)
+                             :bytes buf
+                             :len (.-length buf)
+                             :sha (sha256 buf)
+                             :content-type (or (.get (.-headers res) "content-type") "")})))))
+      (p/catch (fn [e] {:error (str e)}))))
+
+(defn- fetch-json [url]
+  (-> (js/fetch url)
+      (p/then (fn [res]
+                (let [ct (or (.get (.-headers res) "content-type") "")]
+                  (cond
+                    (not (.-ok res)) {:error (str "HTTP " (.-status res))}
+                    (not (str/includes? (str/lower-case ct) "json"))
+                    {:error (str "HTTP " (.-status res) " but content-type " (pr-str ct)
+                                 " -- the host answered a page, not the API")}
+                    :else (p/then (.json res)
+                                  (fn [j] {:json (js->clj j :keywordize-keys true)}))))))
+      (p/catch (fn [e] {:error (str e)}))))
+
+(defn- page-title [body]
+  (let [m (.match body (js/RegExp. "<title[^>]*>([\\s\\S]*?)</title>" "i"))]
+    (when m (str/trim (aget m 1)))))
+
+(defn- meta-charset [body]
+  (let [m (.match body (js/RegExp. "charset=[\"']?([A-Za-z0-9_-]+)" "i"))]
+    (when m (str/lower-case (aget m 1)))))
+
+(defn- de-tag [body]
+  (-> body
+      (.replace (js/RegExp. "<script[\\s\\S]*?</script>" "gi") " ")
+      (.replace (js/RegExp. "<style[\\s\\S]*?</style>" "gi") " ")
+      (.replace (js/RegExp. "<[^>]+>" "g") " ")
+      (.replace (js/RegExp. "\\s+" "g") " ")))
+
+;; --- law checks ---------------------------------------------------------
+
+(defn- egov-lookup
+  "Ask the law API about one id. The repeal and revision fields are carried
+  back deliberately: without repeal, a repealed Act is indistinguishable from
+  a live one, because the title and the law number of a repealed Act are still
+  its title and its law number. Without revision, an Act whose displayed
+  revision is not the enforced one passes as current."
+  [id]
+  (p/let [r (fetch-json (str "https://laws.e-gov.go.jp/api/2/laws?law_id=" id))]
+    (if (:error r)
+      {:error (:error r)}
+      (let [total (:total_count (:json r))
+            hit (first (:laws (:json r)))]
+        (if (or (nil? total) (zero? total) (nil? hit))
+          {:missing true :total total}
+          {:title (get-in hit [:revision_info :law_title])
+           :num (get-in hit [:law_info :law_num])
+           :repeal (get-in hit [:revision_info :repeal_status])
+           :repeal-date (get-in hit [:revision_info :repeal_date])
+           :revision (get-in hit [:revision_info :current_revision_status])})))))
+
+(defn- check-egov [e]
+  (let [id (:egov/law-id e)
+        want-repeal (:egov/repeal-status e)
+        want-revision (:egov/revision-status e)]
+    (cond
+      (str/blank? (str id))
+      (p/resolved {:verdict :refused :reason :no-law-id
+                   :why "tagged :e-gov-law-id but has no :egov/law-id"})
+
+      (str/blank? (str want-repeal))
+      (p/resolved {:verdict :refused :reason :no-repeal-declaration
+                   :why (str "no :egov/repeal-status. A repealed Act answers "
+                             "with a matching title and law number, so an "
+                             "entry that does not declare its repeal state "
+                             "cannot be established by this check.")})
+
+      (str/blank? (str want-revision))
+      (p/resolved {:verdict :refused :reason :no-revision-declaration
+                   :why (str "no :egov/revision-status. repeal_status None is "
+                             "not the same as in force -- a live Act can carry "
+                             "current_revision_status PreviousEnforced.")})
+
+      :else
+      (p/let [r (egov-lookup id)]
+        (cond
+          (:error r) {:verdict :refused :reason :law-api-unreachable
+                      :why (str "law API unreachable: " (:error r))}
+
+          (:missing r) {:verdict :fail :reason :nonexistent-law
+                        :why (str "law id " id " does not exist (total_count "
+                                  (pr-str (:total r))
+                                  ") -- the /law/ URL still answers 200")}
+
+          (not= (:title r) (:egov/law-title e))
+          {:verdict :fail :reason :law-title-drift
+           :why (str "title drift: register " (pr-str (:egov/law-title e))
+                     " vs API " (pr-str (:title r)))}
+
+          (not= (:num r) (:egov/law-num e))
+          {:verdict :fail :reason :law-num-drift
+           :why (str "law number drift: register " (pr-str (:egov/law-num e))
+                     " vs API " (pr-str (:num r)))}
+
+          (not= (:repeal r) want-repeal)
+          {:verdict :fail :reason :repeal-status-drift
+           :why (str "repeal status drift: register " (pr-str want-repeal)
+                     " vs API " (pr-str (:repeal r))
+                     (when (:repeal-date r) (str " (repealed " (:repeal-date r) ")"))
+                     " -- title and law number both still match, which is why "
+                     "this is the field that has to be checked")}
+
+          (not= (:revision r) want-revision)
+          {:verdict :fail :reason :revision-status-drift
+           :why (str "revision status drift: register " (pr-str want-revision)
+                     " vs API " (pr-str (:revision r))
+                     " -- repeal status is " (pr-str (:repeal r))
+                     ", so nothing but this field distinguishes them")}
+
+          :else {:verdict :pass
+                 :detail (str (:title r) " / " (:num r)
+                              " / repeal " (:repeal r) " / rev " (:revision r))})))))
+
+;; --- page checks --------------------------------------------------------
+
+(defn- check-page
+  "hosts is the measured host table for this run: {host-name {:missing-body ..
+  :charset .. :blind? ..}}. A page on a blind host is REFUSED, never failed."
+  [e hosts]
+  (let [host (:page/host e)
+        h (get hosts host)
+        needles (vec (:page/must-contain e))]
+    (cond
+      (nil? h)
+      (p/resolved {:verdict :refused :reason :unknown-host
+                   :why (str "page cites host " (pr-str host)
+                             " which has no :host-behaviour entry, so nothing "
+                             "is known about what it does with a path it does "
+                             "not have")})
+
+      (:blind? h)
+      (p/resolved {:verdict :refused :reason :page-on-blind-host
+                   :why (str host " cannot distinguish a missing page from a "
+                             "refused request (" (name (:missing-mode h))
+                             "), so a page check on it establishes nothing")})
+
+      (str/blank? (str (:page/title e)))
+      (p/resolved {:verdict :refused :reason :no-title-declaration
+                   :why "no :page/title to compare against"})
+
+      (empty? needles)
+      (p/resolved {:verdict :refused :reason :no-needles
+                   :why ":page-text with an empty :page/must-contain"})
+
+      ;; Clear the needles against the host's own missing-page body FIRST.
+      ;; A needle that is on the 404 body passes on a page that is not there,
+      ;; so it is a finding about the register, not about the page.
+      (seq (filter #(str/includes? (:missing-body h) %) needles))
+      (p/resolved
+        {:verdict :fail :reason :chrome-needle
+         :why (str "needle(s) "
+                   (pr-str (vec (filter #(str/includes? (:missing-body h) %) needles)))
+                   " are present on " host "'s own missing-page body, so they "
+                   "would match on a URL that does not exist")})
+
+      :else
+      (p/let [r (fetch-bytes (:source/url e) {:ua? (:ua? h)})]
+        (if (:error r)
+          {:verdict :refused :reason :unreachable
+           :why (str "could not fetch: " (:error r))}
+          (let [body (decode (:bytes r) (:charset h))
+                t (page-title body)
+                mc (meta-charset body)
+                text (de-tag body)]
+            (cond
+              (not (:ok r))
+              {:verdict :fail :reason :not-2xx
+               :why (str "HTTP " (:status r) " (" host " answers "
+                         (:missing-status h) " for a path it does not have, "
+                         "and answered 200 for a known-real path in this same "
+                         "run, so this is the page and not the client)")}
+
+              (not= (:final r) (:source/url e))
+              {:verdict :fail :reason :unexpected-redirect
+               :why (str "landed on " (:final r) " instead of " (:source/url e))}
+
+              ;; If the page's own declared charset has moved away from the
+              ;; host declaration, the decode above is wrong and every
+              ;; comparison below is meaningless. That is REFUSED -- the
+              ;; register is out of date -- not a page failure.
+              (and mc (not= mc (str/lower-case (:charset h))))
+              {:verdict :refused :reason :charset-drift
+               :why (str "page declares charset " (pr-str mc) " but facts.edn "
+                         "declares " (pr-str (:charset h)) " for this host. "
+                         "The body was decoded with the host declaration, so "
+                         "the title and needles below cannot be trusted -- "
+                         "re-measure the host before reading this as a page "
+                         "failure")}
+
+              (not= t (:page/title e))
+              {:verdict :fail :reason :title-drift
+               :why (str "title drift: register " (pr-str (:page/title e))
+                         " vs live " (pr-str t))}
+
+              (seq (remove #(str/includes? text %) needles))
+              {:verdict :fail :reason :missing-text
+               :why (str "missing from body: "
+                         (pr-str (vec (remove #(str/includes? text %) needles))))}
+
+              :else {:verdict :pass
+                     :detail (str (:status r) " " (:len r) "B " (pr-str t))})))))))
+
+;; --- host preflight -----------------------------------------------------
+;; Every page verdict is worth exactly as much as this. Run first, and refuse
+;; the whole run rather than report on the register if a host no longer
+;; behaves the way facts.edn says it does.
+
+(defn- measure-404-host [e]
+  (p/let [missing (fetch-bytes (str "https://" (:host/name e)
+                                    "/no-such-page-zzz999-verify.html") {})
+          real (fetch-bytes (str "https://" (:host/name e)
+                                 (:host/known-real-path e)) {})]
+    (cond
+      (:error missing) {:refuse (str "missing-path probe failed: " (:error missing))}
+      (:error real) {:refuse (str "known-real-path probe failed: " (:error real))}
+
+      (not= (:status missing) (:host/missing-status e))
+      {:refuse (str (:host/name e) " answered " (:status missing)
+                    " for a path that does not exist; facts.edn declares "
+                    (:host/missing-status e)
+                    ". Re-measure the host before trusting any page verdict.")}
+
+      ;; If a missing path and a real path answer alike, this host has stopped
+      ;; discriminating and every :not-2xx verdict on it would be noise.
+      (= (:status missing) (:status real))
+      {:refuse (str (:host/name e) " answers " (:status missing)
+                    " for BOTH a path that does not exist and "
+                    (:host/known-real-path e)
+                    " -- this client cannot tell a dead citation from a "
+                    "refused request on this host")}
+
+      (not (:ok real))
+      {:refuse (str (:host/name e) " answered " (:status real)
+                    " for its own known-real path "
+                    (:host/known-real-path e)
+                    " -- this run is being refused, which is not a finding "
+                    "about the register")}
+
+      :else
+      (let [body (decode (:bytes missing) (:host/charset e))
+            t (page-title body)]
+        (if (and (:host/missing-title e) (not= t (:host/missing-title e)))
+          {:refuse (str (:host/name e) "'s missing-page title is now "
+                        (pr-str t) "; facts.edn declares "
+                        (pr-str (:host/missing-title e))
+                        ". The chrome-needle clearance below is measured "
+                        "against this body, so it has to be re-measured too.")}
+          {:missing-body (de-tag body)
+           :missing-status (:status missing)
+           :charset (:host/charset e)
+           :ua? false
+           :blind? false
+           :detail (str "404 " (:len missing) "B / real "
+                        (:status real) " " (:len real) "B")})))))
+
+(defn- measure-refusing-host
+  "The one that matters here. Re-measures that a live page and a missing page
+  are the SAME BYTES to a refused client, and that the browser UA is what
+  moves the answer. Both halves have to still hold: if the block is lifted,
+  this host becomes checkable and the :refuses-indistinguishably declaration
+  has expired."
+  [e]
+  (p/let [base (str "https://" (:host/name e))
+          real-ua (fetch-bytes (str base (:host/known-real-path e)) {:ua? true})
+          real-noua (fetch-bytes (str base (:host/known-real-path e)) {:ua? false})
+          missing-ua (fetch-bytes (str base "/no-such-page-zzz999-verify.htm") {:ua? true})]
+    (cond
+      (or (:error real-ua) (:error real-noua) (:error missing-ua))
+      {:refuse (str (:host/name e) " probe failed: "
+                    (or (:error real-ua) (:error real-noua) (:error missing-ua)))}
+
+      (not (:ok real-ua))
+      {:refuse (str (:host/name e) " answered " (:status real-ua)
+                    " for " (:host/known-real-path e)
+                    " even with a browser User-Agent. facts.edn records 200 "
+                    "there; with no path known to be served, nothing about "
+                    "this host can be established.")}
+
+      (not= (:status real-noua) (:host/refusal-status e))
+      {:refuse (str (:host/name e) " now answers " (:status real-noua)
+                    " for a real path without a User-Agent; facts.edn records "
+                    (:host/refusal-status e)
+                    ". The refusal behaviour has changed -- re-measure.")}
+
+      ;; The claim in facts.edn is byte-identity, so check byte-identity.
+      (not= (:sha real-noua) (:sha missing-ua))
+      {:refuse (str (:host/name e) " no longer returns identical bytes for "
+                    "a real page refused (" (subs (:sha real-noua) 0 16)
+                    "...) and a missing page (" (subs (:sha missing-ua) 0 16)
+                    "...). It has started to discriminate, so the "
+                    ":refuses-indistinguishably declaration has expired and "
+                    "page entries on this host may now be checkable.")}
+
+      (not (str/starts-with? (:sha real-noua) (:host/refusal-sha256-prefix e)))
+      {:refuse (str (:host/name e) "'s refusal body changed: sha256 "
+                    (subs (:sha real-noua) 0 16) "... vs declared "
+                    (:host/refusal-sha256-prefix e) "...")}
+
+      :else
+      {:blind? true
+       :missing-mode :refuses-indistinguishably
+       :missing-body ""
+       :charset (:host/charset e)
+       :ua? true
+       :detail (str "real+UA " (:status real-ua) " " (:len real-ua) "B; "
+                    "real-noUA " (:status real-noua) " " (:len real-noua) "B; "
+                    "missing+UA " (:status missing-ua) " " (:len missing-ua) "B; "
+                    "the two 403s identical at " (subs (:sha real-noua) 0 16) "...")})))
+
+(defn- measure-indistinguishable-host [e]
+  (p/let [base (str "https://" (:host/name e))
+          real (fetch-bytes (str base (:host/known-real-path e)) {})
+          fake (fetch-bytes (str base "/law/999ZZ9999999999") {})]
+    (cond
+      (or (:error real) (:error fake))
+      {:refuse (str (:host/name e) " probe failed: " (or (:error real) (:error fake)))}
+
+      ;; If it HAS started discriminating, the declaration has expired. That is
+      ;; refused rather than silently kept, because the whole reason statutes
+      ;; go through the API is this measurement.
+      (not= [(:status real) (page-title (decode (:bytes real) (:host/charset e)))]
+            [(:status fake) (page-title (decode (:bytes fake) (:host/charset e)))])
+      {:refuse (str (:host/name e) " now distinguishes a real law path from an "
+                    "invented one (real " (:status real) " vs invented "
+                    (:status fake) "). facts.edn declares it "
+                    ":indistinguishable; that has expired -- re-measure.")}
+
+      :else
+      {:blind? true
+       :missing-mode :indistinguishable
+       :missing-body ""
+       :charset (:host/charset e)
+       :ua? false
+       :detail (str "real and invented both " (:status real) " / "
+                    (:len real) "B vs " (:len fake) "B / same title")})))
+
+(defn- measure-host [e]
+  (case (:host/missing-path e)
+    :answers-404 (measure-404-host e)
+    :refuses-indistinguishably (measure-refusing-host e)
+    :indistinguishable (measure-indistinguishable-host e)
+    (p/resolved {:refuse (str "unknown :host/missing-path "
+                              (pr-str (:host/missing-path e)))})))
+
+;; --- coverage -----------------------------------------------------------
+
+(defn- check-coverage
+  "The coverage record claims a count. Check it, because a coverage line that
+  drifts from the register is a claim nobody measured."
+  [cov sources]
+  (let [verified (filter :source/verify sources)
+        actual (count verified)
+        by (into {} (frequencies (map :source/verify verified)))]
+    (cond
+      (not= actual (:coverage/entries cov))
+      {:verdict :fail :reason :coverage-drift
+       :why (str "coverage declares " (:coverage/entries cov)
+                 " verified entries, register carries " actual)}
+
+      (not= by (:coverage/by-verify cov))
+      {:verdict :fail :reason :coverage-drift
+       :why (str "coverage :by-verify " (pr-str (:coverage/by-verify cov))
+                 " vs actual " (pr-str by))}
+
+      :else {:verdict :pass :detail (str actual " entries " (pr-str by))})))
+
+
+(defn- mojibake-probe
+  "The load-bearing measurement, made directly rather than inferred.
+
+  Fetch the live entry-procedure page once and decode the SAME bytes twice:
+  with the host's declared Shift_JIS, and as UTF-8, which is what `res.text()`
+  does. Require the register's real needles to be present in the first and
+  absent from the second.
+
+  If that ever stops holding -- because the host migrated to UTF-8, or because
+  the needles happen to survive the wrong decode -- then decoding correctly has
+  stopped being what makes this verifier work, and every page entry needs
+  re-measuring. This returns a reason either way so the run can tell those
+  apart instead of quietly continuing."
+  [e hosts]
+  (let [h (get hosts (:page/host e))
+        needles (vec (:page/must-contain e))]
+    (p/let [r (fetch-bytes (:source/url e) {:ua? (:ua? h)})]
+      (if (or (:error r) (not (:ok r)))
+        {:reason :mojibake-probe-unreachable}
+        (let [right (de-tag (decode (:bytes r) (:charset h)))
+              wrong (de-tag (decode (:bytes r) "utf-8"))
+              in-right (filterv #(str/includes? right %) needles)
+              in-wrong (filterv #(str/includes? wrong %) needles)]
+          (cond
+            (not= (count in-right) (count needles))
+            {:reason :mojibake-probe-inconclusive
+             :why (str "needles missing even under the declared charset "
+                       (pr-str (:charset h)) ": found " (pr-str in-right))}
+
+            (seq in-wrong)
+            {:reason :mojibake-probe-inconclusive
+             :why (str "needles " (pr-str in-wrong) " survived a UTF-8 decode "
+                       "of Shift_JIS bytes, so decoding correctly is no longer "
+                       "what makes this check work")}
+
+            :else
+            {:reason :mojibake-loses-needles
+             :why (str (count needles) " needle(s) present under "
+                       (pr-str (:charset h)) ", 0 under utf-8")}))))))
+
+;; --- self-tests ---------------------------------------------------------
+;; Each drives the REAL check function and asserts the reason, not the colour.
+
+(defn- self-tests [sources hosts]
+  (let [by-id (into {} (map (juxt :source/id identity) sources))
+        soumu (get hosts "www.soumu.go.jp")
+        entry (get by-id "page.telecom-entry-procedure")
+        telecom (get by-id "law.telecom-business-act")
+        repealed (get by-id "law.repealed-telecom-broadcast-development")
+        prev-enf (get by-id "law.info-platform-act")
+        cov (first (filter #(= :coverage (:source/kind %)) sources))]
+    (if (or (nil? soumu) (nil? entry) (nil? telecom) (nil? repealed)
+            (nil? prev-enf) (nil? cov))
+      (p/resolved [{:name "fixtures" :got :fixtures-missing :want :present}])
+      (p/let [
+        ;; 1. an invented law id must not resolve
+        t1 (check-egov (assoc telecom :egov/law-id "999ZZ9999999999"))
+
+        ;; 2. THE REAL repealed Act, declared in force, with title and law
+        ;;    number left correct. Only the repeal field can catch this.
+        t2 (check-egov (assoc repealed :egov/repeal-status "None"
+                                       :egov/revision-status "CurrentEnforced"))
+
+        ;; 3. THE REAL PreviousEnforced Act, declared CurrentEnforced, with
+        ;;    title, number AND repeal status all correct. Only the revision
+        ;;    field can catch this.
+        t3 (check-egov (assoc prev-enf :egov/revision-status "CurrentEnforced"))
+
+        ;; 4. a real law id with a wrong expected title
+        t4 (check-egov (assoc telecom :egov/law-title "存在しない法律"))
+
+        ;; 5. a real page with a wrong expected title
+        t5 (check-page (assoc entry :page/title "総務省｜存在しないページ") hosts)
+
+        ;; 6. a path this host answers 404 for
+        t6 (check-page (assoc entry :source/url
+                              "https://www.soumu.go.jp/no-such-page-zzz999-selftest.html")
+                       hosts)
+
+        ;; 7. a real page missing a sentinel string
+        t7 (check-page (assoc entry :page/must-contain ["電気通信事業法" "存在しない語句ZZZ"])
+                       hosts)
+
+        ;; 8. a needle that IS on this host's 404 body. 100-8926 is
+        ;;    organization.edn's own postcode, which is why this matters.
+        t8 (check-page (assoc entry :page/must-contain ["100-8926"]) hosts)
+
+        ;; 9. declaring the wrong charset for the host must be REFUSED --
+        ;;    the register is out of date -- and must NOT surface as nine
+        ;;    page failures, which is what it would look like otherwise.
+        t9 (check-page entry (assoc-in hosts ["www.soumu.go.jp" :charset] "utf-8"))
+
+        ;; 9b. the load-bearing measurement, made directly: the same live
+        ;;     bytes decoded as Shift_JIS and as UTF-8, requiring the real
+        ;;     needles to be present in one and absent from the other.
+        t9b (mojibake-probe entry hosts)
+
+        ;; 10. a page entry on a host that cannot discriminate must be
+        ;;     REFUSED, not failed
+        t10 (check-page (assoc entry :page/host "laws.e-gov.go.jp") hosts)
+
+        ;; 11. a coverage record that miscounts
+        t11 (check-coverage (assoc cov :coverage/entries 9999) sources)]
+        [{:name "invented law id"            :got (:reason t1)  :want :nonexistent-law}
+         {:name "repealed Act declared live" :got (:reason t2)  :want :repeal-status-drift}
+         {:name "PreviousEnforced declared current" :got (:reason t3) :want :revision-status-drift}
+         {:name "law title drift"            :got (:reason t4)  :want :law-title-drift}
+         {:name "page title drift"           :got (:reason t5)  :want :title-drift}
+         {:name "404 path"                   :got (:reason t6)  :want :not-2xx}
+         {:name "missing sentinel"           :got (:reason t7)  :want :missing-text}
+         {:name "needle on 404 chrome"       :got (:reason t8)  :want :chrome-needle}
+         {:name "wrong host charset refused" :got (:reason t9)  :want :charset-drift}
+         {:name "UTF-8 decode loses needles" :got (:reason t9b) :want :mojibake-loses-needles}
+         {:name "page on blind host"         :got (:reason t10) :want :page-on-blind-host}
+         {:name "coverage miscount"          :got (:reason t11) :want :coverage-drift}]))))
+
+;; --- main ---------------------------------------------------------------
+
+(defn- arg-after [flag argv]
+  (second (drop-while #(not= % flag) argv)))
+
+(defn- refuse! [msg]
+  (println)
+  (println "REFUSED —" msg)
+  (println "  exit 2: this run could not answer. That is not a pass.")
+  (js/process.exit 2))
+
+(defn -main [& argv]
+  (let [path (or (arg-after "--facts" argv) "facts.edn")]
+    (when-not (fs/existsSync path)
+      (refuse! (str "no register at " path)))
+    (let [sources (try (edn/read-string (fs/readFileSync path "utf8"))
+                       (catch :default e
+                         (refuse! (str path " does not read as EDN: " e))))]
+      (when-not (and (vector? sources) (seq sources))
+        (refuse! (str path " is not a non-empty vector of entities")))
+      (let [hosts-decl (filter #(= :host-behaviour (:source/kind %)) sources)
+            cov (first (filter #(= :coverage (:source/kind %)) sources))
+            checkable (filter :source/verify sources)]
+        (when (empty? hosts-decl)
+          (refuse! "no :host-behaviour entities -- page checks would rest on nothing"))
+        (when (nil? cov)
+          (refuse! "no :coverage record -- the register does not say where it stops"))
+        (when (empty? checkable)
+          (refuse! (str path " carries no entity with :source/verify")))
+
+        (p/let [;; 1. host preflight
+                _ (p/resolved (println "── host preflight ──"))
+                measured (p/all (map measure-host hosts-decl))
+                hosts (into {} (map (fn [d m] [(:host/name d) m]) hosts-decl measured))]
+
+          (doseq [[d m] (map vector hosts-decl measured)]
+            (if (:refuse m)
+              (println "  REFUSE " (:host/name d) "—" (:refuse m))
+              (println "  ok     " (:host/name d) "—" (:detail m))))
+
+          (when-let [bad (first (filter :refuse measured))]
+            (refuse! (str "host behaviour no longer matches facts.edn. "
+                          (:refuse bad))))
+
+          (p/let [;; 2. self-tests, before reporting on the register
+                  _ (p/resolved (do (println) (println "── self-tests ──")))
+                  st (self-tests sources hosts)]
+            (doseq [t st]
+              (println (if (= (:got t) (:want t)) "  ok    " "  BROKEN")
+                       (:name t) "→" (pr-str (:got t))
+                       (when (not= (:got t) (:want t)) (str "(wanted " (:want t) ")"))))
+            (when-let [bad (seq (remove #(= (:got %) (:want %)) st))]
+              (refuse! (str (count bad) " self-test(s) did not discriminate: "
+                            (pr-str (mapv :name bad))
+                            ". A verifier that cannot tell a bad entry from a "
+                            "good one has nothing to say about the register.")))
+
+            (p/let [;; 3. the register itself
+                    _ (p/resolved (do (println) (println "── register ──")))
+                    results (p/all (map (fn [e]
+                                          (p/let [r (case (:source/verify e)
+                                                      :e-gov-law-id (check-egov e)
+                                                      :page-text (check-page e hosts)
+                                                      (p/resolved
+                                                        {:verdict :refused
+                                                         :reason :unknown-verify
+                                                         :why (str "unknown :source/verify "
+                                                                   (pr-str (:source/verify e)))}))]
+                                            (assoc r :id (:source/id e))))
+                                        checkable))
+                    covr (p/resolved (check-coverage cov sources))]
+              (doseq [r (sort-by :id results)]
+                (println (case (:verdict r)
+                           :pass "  PASS   " :fail "  FAIL   " "  REFUSE ")
+                         (:id r) "—" (or (:detail r) (:why r))))
+              (println (if (= :pass (:verdict covr)) "  PASS   " "  FAIL   ")
+                       "register.coverage —" (or (:detail covr) (:why covr)))
+
+              (let [all (conj (vec results) (assoc covr :id "register.coverage"))
+                    fails (filter #(= :fail (:verdict %)) all)
+                    refused (filter #(= :refused (:verdict %)) all)]
+                (println)
+                (println (str "CHECKED " (count all)
+                              "  pass " (count (filter #(= :pass (:verdict %)) all))
+                              "  fail " (count fails)
+                              "  refused " (count refused)))
+                (cond
+                  (seq refused)
+                  (refuse! (str (count refused) " source(s) could not be checked: "
+                                (pr-str (mapv :id refused))))
+
+                  (seq fails)
+                  (do (println)
+                      (println (str (count fails) " source(s) did not check out. "
+                                    "The register is wrong, not the authority."))
+                      (js/process.exit 1))
+
+                  :else
+                  (do (println)
+                      (println "Every source re-fetched and matched.")
+                      (js/process.exit 0)))))))))))
+
+(apply -main *command-line-args*)
