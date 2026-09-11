@@ -21,7 +21,7 @@
 - clear provenance (official MIC source citation) for every
   requirement surfaced — the citable set is [`facts.edn`](../facts.edn),
   re-checkable against the live authorities with
-  `nbb scripts/verify-facts.cljk`. A requirement whose basis is not in that
+  `kbb --backend sci scripts/verify-facts.cljk`. A requirement whose basis is not in that
   register has no provenance. Note in particular that the register does
   **not** establish whether an operator needs 登録 or 届出: that turns on
   facility-scale thresholds in 電気通信事業法施行規則, which is cited as an
